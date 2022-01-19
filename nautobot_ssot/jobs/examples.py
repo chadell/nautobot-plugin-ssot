@@ -1,5 +1,5 @@
 """Sample data-source and data-target Jobs."""
-from typing import Optional, Mapping
+from typing import Optional, Mapping, Union
 from uuid import UUID
 from django.contrib.contenttypes.models import ContentType
 from django.templatetags.static import static
@@ -8,12 +8,14 @@ from django.urls import reverse
 from nautobot.dcim.models import Region, Site
 from nautobot.ipam.models import Prefix
 from nautobot.tenancy.models import Tenant
-from nautobot.extras.jobs import Job, StringVar
+from nautobot.extras.jobs import Job, StringVar, IntegerVar
 from nautobot.extras.models import Status
 
 from diffsync import DiffSync, DiffSyncModel
 from diffsync.enum import DiffSyncFlags
-
+from diffsync.exceptions import ObjectNotFound
+from django.utils.text import slugify
+import pycountry
 import requests
 
 from nautobot_ssot.jobs.base import DataMapping, DataSource, DataTarget
@@ -39,7 +41,7 @@ class RegionModel(DiffSyncModel):
     parent_name: Optional[str]  # may be None
 
     # Not in _attributes or _identifiers, hence not included in diff calculations
-    pk: Optional[UUID]
+    pk: Optional[Union[UUID, int]]
 
 
 class SiteModel(DiffSyncModel):
@@ -59,7 +61,7 @@ class SiteModel(DiffSyncModel):
     description: str
 
     # Not in _attributes or _identifiers, hence not included in diff calculations
-    pk: Optional[UUID]
+    pk: Optional[Union[UUID, int]]
 
 
 class PrefixModel(DiffSyncModel):
@@ -265,9 +267,10 @@ class RegionLocalModel(RegionModel):
 
     def delete(self):
         """Delete an existing Region record from local Nautobot."""
-        region = Region.objects.get(name=self.name)
-        region.delete()
-        return super().delete()
+        pass
+        # region = Region.objects.get(name=self.name)
+        # region.delete()
+        # return super().delete()
 
 
 class SiteLocalModel(SiteModel):
@@ -651,3 +654,136 @@ class ExampleDataTarget(DataTarget, Job):
             except Prefix.DoesNotExist:
                 pass
         return None
+
+
+PEERINGDB_URL = "https://peeringdb.com/"
+
+
+class PeeringdbAdapter(DiffSync):
+    """DiffSync adapter class for loading data from a remote Nautobot instance using Python requests.
+
+    In a more realistic example, you'd probably use PyNautobot here instead of raw requests,
+    but we didn't want to add PyNautobot as a dependency of this plugin just to make an example more realistic.
+    """
+
+    # Model classes used by this adapter class
+    region = RegionModel
+    site = SiteModel
+
+    # Top-level class labels, i.e. those classes that are handled directly rather than as children of other models
+    top_level = ("region", "site")
+
+    def __init__(self, *args, ix_id, url=PEERINGDB_URL, job=None, **kwargs):
+        """Instantiate this class, but do not load data immediately from the remote system.
+
+        Args:
+            url (str): URL of the remote Nautobot system
+            token (str): REST API authentication token
+            job (Job): The running Job instance that owns this DiffSync adapter instance
+        """
+        super().__init__(*args, **kwargs)
+        self.url = url
+        self.job = job
+        self.ix_id = ix_id
+        self.headers = {
+            "Accept": "application/json",
+        }
+
+    def load(self):
+        """Load Region and Site data from the remote Nautobot instance."""
+        ix_data = requests.get(f"{self.url}/api/ix/{self.ix_id}").json()
+
+        for fac in ix_data["data"][0]["fac_set"]:
+            # PeeringDB has no Region entity, so we must avoid duplicates
+            try:
+                self.get(self.region, fac["city"])
+            except ObjectNotFound:
+                # Use pycountry to translate the country code (like "DE") to a country name (like "Germany")
+                parent_name = pycountry.countries.get(alpha_2=fac["country"]).name
+                # Add the country as a parent region if not already added
+                try:
+                    self.get(self.region, parent_name)
+                except ObjectNotFound:
+                    parent_region = self.region(name=parent_name, slug=slugify(parent_name), description=parent_name)
+                    self.add(parent_region)
+                    self.job.log_debug(message=f"Loaded {parent_region} from PeeringDB")
+
+                region = self.region(
+                    name=fac["city"], slug=slugify(fac["city"]), parent_name=parent_name, description=parent_name
+                )
+                self.add(region)
+                self.job.log_debug(message=f"Loaded {region} from PeeringDB")
+
+            site = self.site(
+                name=fac["name"],
+                slug=slugify(fac["name"]),
+                status_slug="active",
+                region_name=fac["city"],
+                description=fac["notes"],
+                pk=fac["id"],
+            )
+            self.add(site)
+            self.job.log_debug(message=f"Loaded {site} from PeeringDB")
+
+
+class PeeringDBDataSource(DataSource, Job):
+    """Sync Region and Site data from a PeeringDB into the local Nautobot instance."""
+
+    source_url = StringVar(
+        description="PeeringDB API to load Sites and Regions from", default="https://www.peeringdb.com/"
+    )
+    ix_id = IntegerVar(description="IX I want to take data from ", default=62)
+
+    class Meta:
+        """Metaclass attributes of PeeringDBDataSource."""
+
+        name = "PeeringDB Data Source"
+        description = 'PeeringDB "data source" Job for loading data into Nautobot from another system.'
+        data_source = "PeeringDB"
+        data_source_icon = static("img/nautobot_logo.png")
+
+    @classmethod
+    def data_mappings(cls):
+        """This Job maps Region and Site objects from the remote system to the local system."""
+        return (
+            DataMapping("Facility", None, "Region", reverse("dcim:region_list")),
+            DataMapping("Facility", None, "Site", reverse("dcim:site_list")),
+        )
+
+    def load_source_adapter(self):
+        """Method to instantiate and load the SOURCE adapter into `self.source_adapter`."""
+        self.source_adapter = PeeringdbAdapter(ix_id=self.kwargs["ix_id"], url=self.kwargs["source_url"], job=self)
+        self.source_adapter.load()
+
+    def load_target_adapter(self):
+        """Method to instantiate and load the TARGET adapter into `self.target_adapter`."""
+        self.target_adapter = NautobotLocal(job=self)
+        self.target_adapter.load()
+
+    def lookup_object(self, model_name, unique_id):
+        """Look up a Nautobot object based on the DiffSync model name and unique ID."""
+        if model_name == "region":
+            try:
+                return Region.objects.get(name=unique_id)
+            except Region.DoesNotExist:
+                pass
+        elif model_name == "site":
+            try:
+                return Site.objects.get(name=unique_id)
+            except Site.DoesNotExist:
+                pass
+        return None
+
+    def calculate_diff(self):
+        """Method to calculate the difference from SOURCE to TARGET adapter and store in `self.diff`.
+
+        This is a generic implementation that you could overwrite completely in your custom logic.
+        """
+        if self.source_adapter is not None and self.target_adapter is not None:
+            self.diff = self.source_adapter.diff_to(self.target_adapter, flags=self.diffsync_flags)
+            self.sync.diff = self.diff.dict()
+            self.log_info(self.diff.dict(), message="diff")
+
+            self.sync.save()
+        else:
+            self.log_warning(message="Not both adapters were properly initialized prior to diff calculation.")

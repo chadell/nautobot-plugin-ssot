@@ -5,12 +5,12 @@ from django.conf import settings
 from nautobot.extras.jobs import get_jobs
 
 from .base import DataSource, DataTarget
-from .examples import ExampleDataSource, ExampleDataTarget
+from .examples import ExampleDataSource, ExampleDataTarget, PeeringDBDataSource
 
 if settings.PLUGINS_CONFIG["nautobot_ssot"]["hide_example_jobs"]:
     jobs = []
 else:
-    jobs = [ExampleDataSource, ExampleDataTarget]
+    jobs = [ExampleDataSource, ExampleDataTarget, PeeringDBDataSource]
 
 
 def get_data_jobs():

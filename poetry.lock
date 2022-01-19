@@ -1180,6 +1180,14 @@ optional = false
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*"
 
 [[package]]
+name = "pycountry"
+version = "22.1.10"
+description = "ISO country, subdivision, language, currency and script definitions and their translations"
+category = "main"
+optional = false
+python-versions = ">=3.5, <4"
+
+[[package]]
 name = "pycparser"
 version = "2.21"
 description = "C parser in Python"
@@ -1707,7 +1715,7 @@ testing = ["pytest (>=4.6)", "pytest-checkdocs (>=2.4)", "pytest-flake8", "pytes
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.6"
-content-hash = "0d4dce4d4fdd32e0e3e70234bc134a3be29334a051438b14a28bb92f701c32b9"
+content-hash = "d738c100a9dcd939a82d7ed50ed9fc283e876ed14e3d9c2f49a7b644c23bee3d"
 
 [metadata.files]
 amqp = [
@@ -2312,6 +2320,9 @@ psycopg2-binary = [
 pycodestyle = [
     {file = "pycodestyle-2.8.0-py2.py3-none-any.whl", hash = "sha256:720f8b39dde8b293825e7ff02c475f3077124006db4f440dcbc9a20b76548a20"},
     {file = "pycodestyle-2.8.0.tar.gz", hash = "sha256:eddd5847ef438ea1c7870ca7eb78a9d47ce0cdb4851a5523949f2601d0cbbe7f"},
+]
+pycountry = [
+    {file = "pycountry-22.1.10.tar.gz", hash = "sha256:b9a6d9cdbf53f81ccdf73f6f5de01b0d8493cab2213a230af3e34458de85ea32"},
 ]
 pycparser = [
     {file = "pycparser-2.21-py2.py3-none-any.whl", hash = "sha256:8ee45429555515e1f6b185e78100aea234072576aa43ab53aefcae078162fca9"},
